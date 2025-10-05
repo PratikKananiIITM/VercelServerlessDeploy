@@ -2,12 +2,13 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List
 import numpy as np
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 app = FastAPI()
 
-# ✅ Enable global CORS for all methods and origins
+# CORSMiddleware remains in place (standard)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,6 +16,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Extra safety: add headers to every response (guaranteed)
+@app.middleware("http")
+async def add_cors_headers(request: Request, call_next):
+    resp = await call_next(request)
+    # Ensure these headers are present on every response
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    # include common headers the client might preflight for
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
+    # expose headers if needed by client
+    resp.headers["Access-Control-Expose-Headers"] = "Content-Type"
+    return resp
 
 class Payload(BaseModel):
     regions: List[str]
@@ -37,20 +51,18 @@ def p95(values):
         return 0.0
     return float(np.percentile(values, 95))
 
-@app.options("/{path:path}")
-async def preflight_handler(path: str):
-    """Handle OPTIONS preflight requests explicitly (important on Vercel)."""
-    from fastapi.responses import JSONResponse
+# Explicit OPTIONS on the endpoint path (fast path for preflight)
+@app.options("/api/latency")
+async def latency_options():
     headers = {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-        "Access-Control-Allow-Headers": "*",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
     }
-    return JSONResponse(content={"status": "ok"}, headers=headers)
+    return PlainTextResponse("ok", headers=headers, status_code=200)
 
 @app.post("/api/latency")
 async def latency_report(payload: Payload, request: Request):
-    """Compute region metrics and return JSON."""
     try:
         result = {}
         for region in payload.regions:
@@ -64,9 +76,12 @@ async def latency_report(payload: Payload, request: Request):
                 "avg_uptime": float(np.mean(uptimes)) if uptimes else 0.0,
                 "breaches": breaches,
             }
-        # ✅ Explicitly add CORS headers to response
-        from fastapi.responses import JSONResponse
-        headers = {"Access-Control-Allow-Origin": "*"}
+        # Explicit JSONResponse with headers (redundant but safe)
+        headers = {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+        }
         return JSONResponse(content=result, headers=headers)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
