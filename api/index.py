@@ -8,25 +8,26 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 app = FastAPI()
 
-# CORSMiddleware remains in place (standard)
+# Keep CORSMiddleware (safe default)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Extra safety: add headers to every response (guaranteed)
+# Middleware to ensure headers on every response and to echo Origin when present
 @app.middleware("http")
 async def add_cors_headers(request: Request, call_next):
     resp = await call_next(request)
-    # Ensure these headers are present on every response
-    resp.headers["Access-Control-Allow-Origin"] = "*"
+    origin = request.headers.get("origin")
+    # If origin exists, echo it; otherwise fallback to wildcard
+    allow_origin = origin if origin else "*"
+    resp.headers["Access-Control-Allow-Origin"] = allow_origin
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    # include common headers the client might preflight for
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-    # expose headers if needed by client
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
     resp.headers["Access-Control-Expose-Headers"] = "Content-Type"
     return resp
 
@@ -51,13 +52,16 @@ def p95(values):
         return 0.0
     return float(np.percentile(values, 95))
 
-# Explicit OPTIONS on the endpoint path (fast path for preflight)
+# Explicit OPTIONS handler for preflight
 @app.options("/api/latency")
-async def latency_options():
+async def latency_options(request: Request):
+    origin = request.headers.get("origin")
+    allow_origin = origin if origin else "*"
     headers = {
-        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Origin": allow_origin,
         "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+        "Access-Control-Allow-Credentials": "true",
     }
     return PlainTextResponse("ok", headers=headers, status_code=200)
 
@@ -76,11 +80,14 @@ async def latency_report(payload: Payload, request: Request):
                 "avg_uptime": float(np.mean(uptimes)) if uptimes else 0.0,
                 "breaches": breaches,
             }
-        # Explicit JSONResponse with headers (redundant but safe)
+        # Build response and ensure headers also set explicitly here
+        origin = request.headers.get("origin")
+        allow_origin = origin if origin else "*"
         headers = {
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": allow_origin,
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Accept",
+            "Access-Control-Allow-Credentials": "true",
         }
         return JSONResponse(content=result, headers=headers)
     except Exception as e:
