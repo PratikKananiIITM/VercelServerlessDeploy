@@ -1,20 +1,18 @@
 # api/index.py
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
-from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
-import logging
-import traceback
-import sys
-
-logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
 app = FastAPI()
+
+# ✅ Enable global CORS for all methods and origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST", "OPTIONS"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -23,34 +21,47 @@ class Payload(BaseModel):
     threshold_ms: float
 
 telemetry = {
-    "amer": [{"latency": 120, "uptime": 1}, {"latency": 200, "uptime": 1}, {"latency": 160, "uptime": 0.99}],
-    "apac": [{"latency": 220, "uptime": 0.999}, {"latency": 140, "uptime": 1}],
+    "amer": [
+        {"latency": 120, "uptime": 1.0},
+        {"latency": 200, "uptime": 1.0},
+        {"latency": 160, "uptime": 0.99},
+    ],
+    "apac": [
+        {"latency": 220, "uptime": 0.999},
+        {"latency": 140, "uptime": 1.0},
+    ],
 }
 
-def p95(arr):
-    if not arr:
+def p95(values):
+    if not values:
         return 0.0
-    return float(np.percentile(arr, 95))
+    return float(np.percentile(values, 95))
+
+@app.options("/{path:path}")
+async def preflight_handler(path: str):
+    """Handle OPTIONS preflight requests explicitly (important on Vercel)."""
+    from fastapi.responses import JSONResponse
+    headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    return JSONResponse(content={"status": "ok"}, headers=headers)
 
 @app.post("/api/latency")
 async def latency_report(payload: Payload, request: Request):
+    """Compute region metrics and return JSON."""
     try:
-        out = {}
+        result = {}
         for region in payload.regions:
-            recs = telemetry.get(region, [])
-            latencies = [float(r["latency"]) for r in recs]
-            uptimes = [float(r["uptime"]) for r in recs]
+            data = telemetry.get(region, [])
+            latencies = [d["latency"] for d in data]
+            uptimes = [d["uptime"] for d in data]
             breaches = sum(1 for l in latencies if l > payload.threshold_ms)
-            out[region] = {
+            result[region] = {
                 "avg_latency": float(np.mean(latencies)) if latencies else 0.0,
                 "p95_latency": p95(latencies),
                 "avg_uptime": float(np.mean(uptimes)) if uptimes else 0.0,
-                "breaches": int(breaches)
+                "breaches": breaches,
             }
-        return out
-    except Exception as e:
-        # Log full traceback to stderr so Vercel shows it in logs
-        tb = traceback.format_exc()
-        logging.error("Unhandled error in /api/latency:\n%s", tb)
-        # Return helpful JSON for debugging (remove or reduce in production)
-        raise HTTPException(status_code=500, detail={"error": str(e), "trace": tb})
+        # ✅ Explic
