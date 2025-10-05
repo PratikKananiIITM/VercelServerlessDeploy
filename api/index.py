@@ -64,4 +64,9 @@ async def latency_report(payload: Payload, request: Request):
                 "avg_uptime": float(np.mean(uptimes)) if uptimes else 0.0,
                 "breaches": breaches,
             }
-        # ✅ Explic
+        # ✅ Explicitly add CORS headers to response
+        from fastapi.responses import JSONResponse
+        headers = {"Access-Control-Allow-Origin": "*"}
+        return JSONResponse(content=result, headers=headers)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
